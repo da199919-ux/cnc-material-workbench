@@ -71,6 +71,13 @@ th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: lef
 th { color: var(--muted); font-weight: 600; }
 td.num { font-family: var(--mono); text-align: right; }
 td.wrap { white-space: normal; min-width: 160px; }
+.table-wrap tbody tr { cursor: pointer; }
+.table-wrap tbody tr:hover, .table-wrap tbody tr.sel { background: var(--accent-soft); }
+.table-wrap tbody tr.sel { box-shadow: inset 3px 0 0 var(--accent); }
+.picked {
+  position: sticky; bottom: 8px; z-index: 1; margin-top: 12px; padding: 10px 12px;
+  background: var(--panel); border: 2px solid var(--accent); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+}
 @media (max-width: 640px) {
   .table-wrap table, .table-wrap tbody, .table-wrap tr, .table-wrap td { display: block; }
   .table-wrap thead { display: none; }
@@ -78,6 +85,7 @@ td.wrap { white-space: normal; min-width: 160px; }
   .table-wrap td { border: none; padding: 2px 0; white-space: normal; text-align: left; display: flex; gap: 10px; min-width: 0; }
   .table-wrap td::before { content: attr(data-label); color: var(--muted); flex: 0 0 4em; }
   .table-wrap td:empty, .table-wrap td[data-label="#"] { display: none; }
+  .table-wrap tbody tr.sel { border-color: var(--accent); box-shadow: none; }
 }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
@@ -448,6 +456,8 @@ function renderMaterialOptions() {
 }
 
 let lastText = "";
+// 點選的比對結果：以「分頁|列號」識別；篩選條件改變後不在結果內就自動取消
+let selectedKey = null, selectedText = "";
 
 function renderMatch(v, stock) {
   const out = $("matchOut");
@@ -472,6 +482,7 @@ function renderMatch(v, stock) {
   if (!res.cands.length) {
     html += `<p class="bad">${v.all ? "這家沒有尺寸足夠的規格。" : "沒有找到同牌號且尺寸足夠的規格。"}</p>`;
     lines.push("沒有找到符合的規格。");
+    selectedKey = null; selectedText = "";
   } else {
     const MAX_ROWS = 300;
     if (res.cands.length > MAX_ROWS) {
@@ -483,14 +494,17 @@ function renderMatch(v, stock) {
     html += `<div class="table-wrap"><table>
       <thead><tr><th>#</th><th>供應商分頁</th><th>材質</th>
       <th>厚</th><th>寬</th><th>長</th><th>厚多</th><th>放置</th><th>單價</th><th>單位</th><th>估算</th><th>規格原文</th><th>備註</th></tr></thead><tbody>`;
+    let picked = null;
     res.cands.forEach((c, i) => {
       const e = c.est;
+      const key = c.sheet + "|" + c.rowNo;
+      if (key === selectedKey) picked = c;
       const estCell = e.cost !== undefined
         ? `約 ${e.cost} 元/件<br><span class="note">${e.kg} kg × ${e.unitPrice}（${e.size.map(fmt).join("×")}，ρ ${e.density}）${v.qty > 1 ? `<br>${v.qty} 件約 ${round(e.cost * v.qty, 1)} 元` : ""}</span>`
         : `<span class="note">${esc(e.note)}</span>`;
       if (!stock) { c.placement = "—"; c.extraT = null; }   // 沒輸入尺寸時不判斷放置與厚度餘量
       const placeCls = c.placement.includes("待確認") ? "warn" : "ok";
-      html += `<tr>
+      html += `<tr data-key="${esc(key)}"${key === selectedKey ? ' class="sel"' : ""}>
         <td class="num" data-label="#">${i + 1}</td><td data-label="供應商">${esc(c.sheet)}</td><td data-label="材質">${esc(c.grade)}</td>
         <td class="num" data-label="厚">${fmt(c.t)}</td><td class="num" data-label="寬">${fmt(c.w)}</td><td class="num" data-label="長">${fmt(c.l)}</td>
         <td class="num" data-label="厚多">${fmt(c.extraT)}</td><td data-label="放置"><span class="${placeCls === "ok" ? "ok" : ""}" style="${placeCls === "warn" ? "color:var(--warn)" : ""}">${esc(c.placement)}</span></td>
@@ -501,6 +515,18 @@ function renderMatch(v, stock) {
         (e.cost !== undefined ? `｜估 ${e.cost} 元` : ""));
     });
     html += `</tbody></table></div>`;
+
+    selectedText = "";
+    if (!picked) selectedKey = null;
+    else {
+      const c = picked, e = c.est;
+      const size = [c.t, c.w, c.l].filter(x => x !== null).map(fmt).join("×");
+      const cost = e.cost !== undefined ? `估 ${e.cost} 元/件` + (v.qty > 1 ? `，${v.qty} 件約 ${round(e.cost * v.qty, 1)} 元` : "") : e.note;
+      const desc = `${c.sheet}｜${c.grade}｜${size}${c.spec ? `（${c.spec}）` : ""}｜${c.placement}｜單價 ${c.price || "空白"} ${c.unit}｜${cost}`;
+      selectedText = (stock ? `備料 ${v.all ? c.grade : v.material}：${stock.map(fmt).join(" × ")} mm（厚 × 寬 × 長）${v.qty > 1 ? ` × ${v.qty} 件` : ""}\n` : "") + `選用：${desc}`;
+      html += `<div class="picked"><strong>已選：</strong>${esc(desc)}${c.remark ? `<div class="note">備註：${esc(c.remark)}</div>` : ""}
+        <div class="row" style="margin-top:8px"><button type="button" id="copyPicked" class="primary">複製這筆</button><button type="button" id="clearPicked">取消選擇</button></div></div>`;
+    }
   }
   lines.push("提醒：規格有列出不代表有貨；未做材質替代；材料費為估算，未含鋸切、加工、運費與稅。");
   lastText = lines.join("\n");
@@ -645,10 +671,24 @@ $("addPaste").addEventListener("click", () => {
 $("copy").addEventListener("click", async () => {
   const v = readInputs(), s = computeStock(v);
   const text = (s ? `備料 ${v.all ? "全部材質" : v.material}：${s.map(fmt).join(" × ")} mm（厚 × 寬 × 長，每側留量 ${fmt(v.at)}/${fmt(v.aw)}/${fmt(v.al)}）${v.qty > 1 ? ` × ${v.qty} 件` : ""}\n` : "") + lastText;
-  try { await navigator.clipboard.writeText(text); $("copy").textContent = "已複製"; }
-  catch { prompt("複製以下文字：", text); }
-  setTimeout(() => $("copy").textContent = "複製結果文字", 1500);
+  copyText(text, $("copy"));
 });
+// 比對結果：點一列選取／再點取消；已選摘要的按鈕
+$("matchOut").addEventListener("click", e => {
+  if (e.target.closest("#copyPicked")) { copyText(selectedText, e.target.closest("button")); return; }
+  if (e.target.closest("#clearPicked")) { selectedKey = null; update(); return; }
+  const tr = e.target.closest("tbody tr[data-key]");
+  if (!tr) return;
+  selectedKey = selectedKey === tr.dataset.key ? null : tr.dataset.key;
+  update();
+});
+
+async function copyText(text, btn) {
+  const label = btn.textContent;
+  try { await navigator.clipboard.writeText(text); btn.textContent = "已複製"; }
+  catch { prompt("複製以下文字：", text); }
+  setTimeout(() => btn.textContent = label, 1500);
+}
 
 renderLib();
 update();
