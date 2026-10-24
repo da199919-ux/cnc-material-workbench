@@ -96,6 +96,7 @@ footer { max-width: 1100px; margin: 0 auto; padding: 8px 16px 32px; color: var(-
 <main>
   <section id="calc">
     <h2>1. 成品尺寸與留量</h2>
+    <div style="margin-bottom:12px"><label for="supplierSel">供應商</label><select id="supplierSel"></select></div>
     <div class="grid two">
       <div><label for="materialSel">材質（照圖面牌號）</label><select id="materialSel"></select><input id="material" placeholder="自行輸入牌號，例如 SS41" style="margin-top:6px" hidden></div>
       <div><label for="qty">數量</label><input id="qty" type="number" min="1" step="1" value="1"></div>
@@ -308,7 +309,7 @@ function match(material, stock, tables, allowRotate) {
         t: round(t, 3), w: w === null ? null : round(w, 3), l: l === null ? null : round(l, 3),
         extraT: round(t - T, 3), placement, price: get("單價"), unit: get("單位") || unitFromHead, remark: get("備註"),
       };
-      c.est = estimate(material, stock, c);
+      c.est = estimate(material || c.grade, stock, c);   // 全部材質時用該列牌號估密度
       cands.push(c);
     }
   }
@@ -317,6 +318,7 @@ function match(material, stock, tables, allowRotate) {
 }
 
 function estimate(material, stock, c) {
+  if (!stock[0]) return { note: "未輸入成品尺寸，不估算" };
   const price = c.price.replace(/[^\d.]/g, "");
   if (!price) return { note: "單價空白，不估算（空白不是 0 元）" };
   const unit = c.unit || c.price;
@@ -348,10 +350,14 @@ const store = {
 };
 let tables = store.get("tables") || {};
 
+// 材質欄存 ALL 代表「此供應商的全部材質」
+const ALL = "*";
+
 function readInputs() {
   const num = id => { const v = $(id).value.trim(); return v === "" ? null : Number(v); };
+  const material = $("material").value.trim();
   return {
-    material: $("material").value.trim(), qty: num("qty"),
+    material: material === ALL ? "" : material, all: material === ALL, supplier: $("supplierSel").value, qty: num("qty"),
     t: num("t"), w: num("w"), l: num("l"), at: num("at"), aw: num("aw"), al: num("al"),
   };
 }
@@ -382,7 +388,7 @@ function renderStock(v, stock) {
       <div class="stat"><div class="k">寬 ${fmt(v.w)} + 2 × ${fmt(v.aw)}</div><div class="v">${fmt(W)}</div></div>
       <div class="stat"><div class="k">長 ${fmt(v.l)} + 2 × ${fmt(v.al)}</div><div class="v">${fmt(L)}</div></div>
     </div>
-    <div class="stock-line">備料 ${esc(v.material || "（材質未填）")}：<strong>${fmt(T)} × ${fmt(W)} × ${fmt(L)} mm</strong>（厚 × 寬 × 長）${v.qty > 1 ? ` × ${v.qty} 件` : ""}</div>
+    <div class="stock-line">備料 ${esc(v.all ? "全部材質" : v.material || "（材質未填）")}：<strong>${fmt(T)} × ${fmt(W)} × ${fmt(L)} mm</strong>（厚 × 寬 × 長）${v.qty > 1 ? ` × ${v.qty} 件` : ""}</div>
     <p class="note" style="margin:4px 0 0">${kgInfo}</p>`;
 }
 
@@ -394,6 +400,10 @@ function renderLib() {
         return `<span class="chip ${ok ? "" : "skip"}">${esc(n)}・${tables[n].length} 列${ok ? "" : "・表頭無法辨識"}</span>`;
       }).join("")
     : `<span class="note">尚未載入材料表。</span>`;
+
+  const supSel = $("supplierSel"), curSup = store.get("supplier") || "";
+  supSel.innerHTML = `<option value="">全部供應商</option>` + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  supSel.value = names.includes(curSup) ? curSup : "";
 
   // 每個分頁的牌號；只收有厚度的資料列，避免把表內說明文字或子表編號當成牌號
   const groups = [];
@@ -413,20 +423,27 @@ function renderLib() {
     }
     // 沒有材質欄、改用「類別」欄的分頁（例如協鉦），選項是品項類別而不是牌號
     const isCategory = String(rows[h][col["材質"]] ?? "").includes("類別");
-    if (grades.size) groups.push({ label: sheet + (isCategory ? "（品項類別）" : ""), grades: [...grades].sort((a, b) => a.localeCompare(b, "zh-Hant")) });
+    if (grades.size) groups.push({ sheet, label: sheet + (isCategory ? "（品項類別）" : ""), grades: [...grades].sort((a, b) => a.localeCompare(b, "zh-Hant")) });
   }
-  renderMaterialOptions(groups);
+  materialGroups = groups;
+  renderMaterialOptions();
 }
 
-function renderMaterialOptions(groups) {
-  const sel = $("materialSel"), cur = $("material").value.trim();
+let materialGroups = [];
+
+function renderMaterialOptions() {
+  const sel = $("materialSel"), sup = $("supplierSel").value;
+  const groups = sup ? materialGroups.filter(g => g.sheet === sup) : materialGroups;
+  let cur = $("material").value.trim();
+  if (cur === ALL && !sup) cur = $("material").value = "";   // 「全部材質」只在選了供應商時有效
   const known = new Set(groups.flatMap(g => g.grades));
-  const custom = sel.value === "__custom" || (cur !== "" && !known.has(cur));
-  sel.innerHTML = `<option value="">${known.size ? "請選擇材質" : "請先載入材料表"}</option>` +
+  const custom = sel.value === "__custom" || (cur !== "" && cur !== ALL && !known.has(cur));
+  sel.innerHTML = (sup ? `<option value="">請選擇材質</option><option value="__all">全部材質（${esc(sup)}）</option>`
+                       : `<option value="">${known.size ? "請選擇材質" : "請先載入材料表"}</option>`) +
     groups.map(g => `<optgroup label="${esc(g.label)}">` +
       g.grades.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("") + `</optgroup>`).join("") +
     `<option value="__custom">自行輸入…</option>`;
-  sel.value = custom ? "__custom" : cur;
+  sel.value = custom ? "__custom" : cur === ALL ? "__all" : cur;
   $("material").hidden = !custom;
 }
 
@@ -435,15 +452,17 @@ let lastText = "";
 function renderMatch(v, stock) {
   const out = $("matchOut");
   lastText = "";
-  if (!stock) { out.innerHTML = `<p class="note">先完成第 1 步。</p>`; return; }
-  const names = Object.keys(tables);
-  if (!names.length) { out.innerHTML = `<p class="note">載入材料表後才能比對。</p>`; return; }
-  if (!v.material) { out.innerHTML = `<p class="note">請填材質（照圖面牌號）。</p>`; return; }
+  if (!Object.keys(tables).length) { out.innerHTML = `<p class="note">載入材料表後才能比對。</p>`; return; }
+  if (!v.material && !v.all) { out.innerHTML = `<p class="note">請選擇材質（照圖面牌號）；選了供應商後也可以選「全部材質」。</p>`; return; }
+  if (!stock && !v.all) { out.innerHTML = `<p class="note">先完成第 1 步。</p>`; return; }
 
-  const [T, W, L] = stock;
+  const use = v.supplier && tables[v.supplier] ? { [v.supplier]: tables[v.supplier] } : tables;
+  const names = Object.keys(use);
+  const [T, W, L] = stock || [0, 0, 0];   // 沒輸入尺寸時列出該供應商全部規格
   // match() 沿用腳本的「長、寬、厚」順序
-  const res = match(v.material, [L, W, T], tables, $("rotate").checked);
-  const head = `材質 ${v.material}，備料 ${fmt(T)}×${fmt(W)}×${fmt(L)} mm（厚×寬×長），讀取分頁：${names.join("、")}`;
+  const res = match(v.material, [L, W, T], use, $("rotate").checked);
+  const head = `材質 ${v.all ? "全部" : v.material}，` +
+    (stock ? `備料 ${fmt(T)}×${fmt(W)}×${fmt(L)} mm（厚×寬×長）` : "未輸入尺寸，列出全部規格") + `，讀取分頁：${names.join("、")}`;
 
   let html = `<p style="margin:0">${esc(head)}</p>`;
   if (res.skipped.length)
@@ -451,9 +470,16 @@ function renderMatch(v, stock) {
 
   const lines = [head];
   if (!res.cands.length) {
-    html += `<p class="bad">沒有找到同牌號且尺寸足夠的規格。</p>`;
+    html += `<p class="bad">${v.all ? "這家沒有尺寸足夠的規格。" : "沒有找到同牌號且尺寸足夠的規格。"}</p>`;
     lines.push("沒有找到符合的規格。");
   } else {
+    const MAX_ROWS = 300;
+    if (res.cands.length > MAX_ROWS) {
+      html += `<p class="note">共 ${res.cands.length} 筆，只顯示前 ${MAX_ROWS} 筆；請選材質或輸入尺寸縮小範圍。</p>`;
+      res.cands = res.cands.slice(0, MAX_ROWS);
+    } else {
+      html += `<p class="note">共 ${res.cands.length} 筆。</p>`;
+    }
     html += `<div class="table-wrap"><table>
       <thead><tr><th>#</th><th>供應商分頁</th><th>列</th><th>材質</th><th>規格原文</th>
       <th>厚</th><th>寬</th><th>長</th><th>厚多</th><th>放置</th><th>單價</th><th>單位</th><th>估算</th><th>備註</th></tr></thead><tbody>`;
@@ -462,6 +488,7 @@ function renderMatch(v, stock) {
       const estCell = e.cost !== undefined
         ? `約 ${e.cost} 元/件<br><span class="note">${e.kg} kg × ${e.unitPrice}（${e.size.map(fmt).join("×")}，ρ ${e.density}）${v.qty > 1 ? `<br>${v.qty} 件約 ${round(e.cost * v.qty, 1)} 元` : ""}</span>`
         : `<span class="note">${esc(e.note)}</span>`;
+      if (!stock) { c.placement = "—"; c.extraT = null; }   // 沒輸入尺寸時不判斷放置與厚度餘量
       const placeCls = c.placement.includes("待確認") ? "warn" : "ok";
       html += `<tr>
         <td class="num" data-label="#">${i + 1}</td><td data-label="供應商">${esc(c.sheet)}</td><td class="num" data-label="列">${c.rowNo}</td><td data-label="材質">${esc(c.grade)}</td>
@@ -582,8 +609,16 @@ $("rotate").addEventListener("change", update);
 $("materialSel").addEventListener("change", () => {
   const v = $("materialSel").value, custom = v === "__custom";
   $("material").hidden = !custom;
-  if (custom) $("material").focus();
-  else $("material").value = v;
+  if (custom) { if ($("material").value === ALL) $("material").value = ""; $("material").focus(); }
+  else $("material").value = v === "__all" ? ALL : v;
+  update();
+});
+// 選供應商後預設列出該家全部材質；改回全部供應商時清空材質
+$("supplierSel").addEventListener("change", () => {
+  store.set("supplier", $("supplierSel").value);
+  $("materialSel").value = "";
+  $("material").value = $("supplierSel").value ? ALL : "";
+  renderMaterialOptions();
   update();
 });
 
@@ -609,7 +644,7 @@ $("addPaste").addEventListener("click", () => {
 });
 $("copy").addEventListener("click", async () => {
   const v = readInputs(), s = computeStock(v);
-  const text = (s ? `備料 ${v.material}：${s.map(fmt).join(" × ")} mm（厚 × 寬 × 長，每側留量 ${fmt(v.at)}/${fmt(v.aw)}/${fmt(v.al)}）${v.qty > 1 ? ` × ${v.qty} 件` : ""}\n` : "") + lastText;
+  const text = (s ? `備料 ${v.all ? "全部材質" : v.material}：${s.map(fmt).join(" × ")} mm（厚 × 寬 × 長，每側留量 ${fmt(v.at)}/${fmt(v.aw)}/${fmt(v.al)}）${v.qty > 1 ? ` × ${v.qty} 件` : ""}\n` : "") + lastText;
   try { await navigator.clipboard.writeText(text); $("copy").textContent = "已複製"; }
   catch { prompt("複製以下文字：", text); }
   setTimeout(() => $("copy").textContent = "複製結果文字", 1500);
