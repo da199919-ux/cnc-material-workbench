@@ -481,8 +481,8 @@ function renderMatch(v, stock) {
       html += `<p class="note">共 ${res.cands.length} 筆。</p>`;
     }
     html += `<div class="table-wrap"><table>
-      <thead><tr><th>#</th><th>供應商分頁</th><th>材質</th><th>規格原文</th>
-      <th>厚</th><th>寬</th><th>長</th><th>厚多</th><th>放置</th><th>單價</th><th>單位</th><th>估算</th><th>備註</th></tr></thead><tbody>`;
+      <thead><tr><th>#</th><th>供應商分頁</th><th>材質</th>
+      <th>厚</th><th>寬</th><th>長</th><th>厚多</th><th>放置</th><th>單價</th><th>單位</th><th>估算</th><th>規格原文</th><th>備註</th></tr></thead><tbody>`;
     res.cands.forEach((c, i) => {
       const e = c.est;
       const estCell = e.cost !== undefined
@@ -492,10 +492,10 @@ function renderMatch(v, stock) {
       const placeCls = c.placement.includes("待確認") ? "warn" : "ok";
       html += `<tr>
         <td class="num" data-label="#">${i + 1}</td><td data-label="供應商">${esc(c.sheet)}</td><td data-label="材質">${esc(c.grade)}</td>
-        <td data-label="規格">${esc(c.spec)}</td><td class="num" data-label="厚">${fmt(c.t)}</td><td class="num" data-label="寬">${fmt(c.w)}</td><td class="num" data-label="長">${fmt(c.l)}</td>
+        <td class="num" data-label="厚">${fmt(c.t)}</td><td class="num" data-label="寬">${fmt(c.w)}</td><td class="num" data-label="長">${fmt(c.l)}</td>
         <td class="num" data-label="厚多">${fmt(c.extraT)}</td><td data-label="放置"><span class="${placeCls === "ok" ? "ok" : ""}" style="${placeCls === "warn" ? "color:var(--warn)" : ""}">${esc(c.placement)}</span></td>
         <td class="num" data-label="單價">${esc(c.price) || '<span class="note">空白</span>'}</td><td data-label="單位">${esc(c.unit)}</td>
-        <td class="wrap" data-label="估算">${estCell}</td><td class="wrap" data-label="備註">${esc(c.remark)}</td></tr>`;
+        <td class="wrap" data-label="估算">${estCell}</td><td data-label="規格">${esc(c.spec)}</td><td class="wrap" data-label="備註">${esc(c.remark)}</td></tr>`;
       const size = [c.t, c.w, c.l].filter(x => x !== null).map(fmt).join("×");
       lines.push(`${i + 1}. [${c.sheet} 第${c.rowNo}列] ${c.grade} ${c.spec || size}｜厚多 ${fmt(c.extraT)}｜${c.placement}｜單價 ${c.price || "空白"} ${c.unit}` +
         (e.cost !== undefined ? `｜估 ${e.cost} 元` : ""));
