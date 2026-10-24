@@ -97,7 +97,7 @@ footer { max-width: 1100px; margin: 0 auto; padding: 8px 16px 32px; color: var(-
   <section id="calc">
     <h2>1. 成品尺寸與留量</h2>
     <div class="grid two">
-      <div><label for="material">材質（照圖面牌號）</label><input id="material" list="grades" placeholder="例如 SS41、A6061"></div>
+      <div><label for="materialSel">材質（照圖面牌號）</label><select id="materialSel"></select><input id="material" placeholder="自行輸入牌號，例如 SS41" style="margin-top:6px" hidden></div>
       <div><label for="qty">數量</label><input id="qty" type="number" min="1" step="1" value="1"></div>
     </div>
     <div class="grid three" style="margin-top:12px">
@@ -153,7 +153,6 @@ footer { max-width: 1100px; margin: 0 auto; padding: 8px 16px 32px; color: var(-
       <div class="row" style="margin-top:8px"><button id="addPaste" type="button">加入</button></div>
     </details>
     <div id="libInfo" class="chips"></div>
-    <datalist id="grades"></datalist>
   </section>
 
   <section id="match">
@@ -396,16 +395,39 @@ function renderLib() {
       }).join("")
     : `<span class="note">尚未載入材料表。</span>`;
 
-  const grades = new Set();
-  for (const rows of Object.values(tables)) {
+  // 每個分頁的牌號；只收有厚度的資料列，避免把表內說明文字或子表編號當成牌號
+  const groups = [];
+  for (const [sheet, rows] of Object.entries(tables)) {
     const hdr = findHeader(rows);
     if (!hdr || !("材質" in hdr[1])) continue;
-    for (const r of rows.slice(hdr[0] + 1)) {
-      const g = String(r[hdr[1]["材質"]] ?? "").trim();
-      if (g && g.length <= 20) grades.add(g);
+    const [h, col] = hdr;
+    const grades = new Set();
+    let last = "";
+    for (const r of rows.slice(h + 1)) {
+      const cell = key => key in col ? String(r[col[key]] ?? "").trim() : "";
+      if (cell("材質")) last = cell("材質");   // 合併儲存格常只在第一列有值
+      const dims = cell("規格") ? parseSpec(cell("規格")) : [];
+      const t = cell("厚") ? toMm(cell("厚")) : (dims.length ? dims[0] : null);
+      if (!last || t === null || last.length > 30 || /^\d+(\.\d+)?$/.test(last)) continue;
+      grades.add(last);
     }
+    // 沒有材質欄、改用「類別」欄的分頁（例如協鉦），選項是品項類別而不是牌號
+    const isCategory = String(rows[h][col["材質"]] ?? "").includes("類別");
+    if (grades.size) groups.push({ label: sheet + (isCategory ? "（品項類別）" : ""), grades: [...grades].sort((a, b) => a.localeCompare(b, "zh-Hant")) });
   }
-  $("grades").innerHTML = [...grades].sort().map(g => `<option value="${esc(g)}">`).join("");
+  renderMaterialOptions(groups);
+}
+
+function renderMaterialOptions(groups) {
+  const sel = $("materialSel"), cur = $("material").value.trim();
+  const known = new Set(groups.flatMap(g => g.grades));
+  const custom = sel.value === "__custom" || (cur !== "" && !known.has(cur));
+  sel.innerHTML = `<option value="">${known.size ? "請選擇材質" : "請先載入材料表"}</option>` +
+    groups.map(g => `<optgroup label="${esc(g.label)}">` +
+      g.grades.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("") + `</optgroup>`).join("") +
+    `<option value="__custom">自行輸入…</option>`;
+  sel.value = custom ? "__custom" : cur;
+  $("material").hidden = !custom;
 }
 
 let lastText = "";
@@ -557,6 +579,13 @@ for (const f of FIELDS) {
 const savedRotate = store.get("rotate");
 if (savedRotate !== null) $("rotate").checked = savedRotate;
 $("rotate").addEventListener("change", update);
+$("materialSel").addEventListener("change", () => {
+  const v = $("materialSel").value, custom = v === "__custom";
+  $("material").hidden = !custom;
+  if (custom) $("material").focus();
+  else $("material").value = v;
+  update();
+});
 
 $("resetAllow").addEventListener("click", () => { ["at", "aw", "al"].forEach(id => $(id).value = 2); update(); });
 $("file").addEventListener("change", async e => {
