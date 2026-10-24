@@ -167,11 +167,11 @@ footer { max-width: 1100px; margin: 0 auto; padding: 8px 16px 32px; color: var(-
       <li>只做「同牌號」比對，不把 SS41／S45C／S50C 等互相替代。</li>
       <li>厚度須 ≥ 備料厚度；長寬有標才比對，沒標就列「長度待確認」。</li>
       <li>規格有列出不代表現在有貨，請向供應商確認庫存。空白價格不是 0 元。</li>
-      <li>材料費只在單位是「元/kg」時估算：供應商斷面 × 備料長 × 密度，未含鋸路損耗、最低計費重量、稅別、加工與運費。</li>
+      <li>材料費只在單位是「元/kg」時估算，以供應商厚度計重：板材按備料長寬切料，條料按供應商寬 × 備料長；未含鋸路損耗、最低計費重量、稅別、加工與運費。</li>
     </ul>
   </section>
 </main>
-<footer>cnc-material-workbench · 比對規則與 cnc-work-order skill 的 material_match.py 一致</footer>
+<footer>cnc-material-workbench · 比對規則以 cnc-work-order skill 的 material_match.py 為基礎</footer>
 
 <script>
 "use strict";
@@ -181,24 +181,33 @@ const INCH = 25.4, FOOT = 304.8;
 
 const DENSITY = [
   [/^SUS/i, 7.93],                                                   // 不鏽鋼
-  [/^(A\d{4}|AL)/i, 2.70],                                           // 鋁
+  [/^(A\d{4}|AL|[1-7]\d{3}[TH])/i, 2.70],                            // 鋁（A6061、6061T6）
   [/^C\d{4}/i, 8.5],                                                 // 銅合金
   [/^(SS\d{2,3}|S\d{2}C|SCM|SKD|SKH|SK\d|NAK|P20|DC53|FC|FCD)/i, 7.85],
 ];
 
-// 欄位名稱關鍵字（依試算表實際表頭調整）
+// 欄位名稱關鍵字（依試算表實際表頭調整）；同一欄位依關鍵字順序優先
 const COLS = {
-  "材質": ["材質", "材料", "鋼種", "牌號", "品名", "材"],
-  "規格": ["規格", "尺寸", "品項", "size"],
+  "材質": ["材質", "材料", "鋼種", "牌號", "品名", "材", "類別"],
+  "規格": ["規格", "尺寸", "size", "品項"],
   "厚": ["厚度", "厚", "t", "T"],
   "寬": ["寬度", "寬", "w", "W"],
   "長": ["長度", "長", "l", "L"],
-  "單價": ["單價", "價格", "價錢", "售價", "元"],
-  "單位": ["單位", "計價", "計價單位"],
+  "單價": ["單價", "未稅價", "含稅價", "牌價", "價格", "價錢", "售價", "元"],
+  "單位": ["計價單位", "計價", "單位"],
   "備註": ["備註", "說明", "註"],
 };
+// 含這些字的表頭不算該欄位（例如「尺寸單位」「計重單位」不是計價單位）
+const COLS_EXCLUDE = { "單位": ["尺寸", "計重", "重量"] };
 
 const normGrade = s => String(s || "").replace(/[\s\-_]/g, "").toUpperCase();
+
+// 鋁的 A6061 與 6061T6 是同一牌號的不同寫法；只用在材質欄比對，不做跨牌號替代
+function gradeAliases(material) {
+  const g = normGrade(material);
+  const m = g.match(/^A?([1-7]\d{3})/);
+  return m && !g.startsWith(m[1]) ? [g, m[1]] : [g];
+}
 
 function toMm(value) {
   let s = String(value).trim().replace(/吋/g, '"').replace(/[″”]/g, '"')
@@ -235,12 +244,13 @@ function findHeader(rows) {
   rows.slice(0, 10).forEach((row, i) => {
     const mapping = {};
     for (const [key, words] of Object.entries(COLS)) {
-      for (let j = 0; j < row.length; j++) {
-        const c = String(row[j] ?? "").trim();
-        if (c && words.some(w => c === w || (w.length > 1 && c.includes(w)))) {
-          if (!(key in mapping)) mapping[key] = j;
-          break;
-        }
+      const skip = COLS_EXCLUDE[key] || [];
+      for (const w of words) {
+        const j = row.findIndex(cell => {
+          const c = String(cell ?? "").trim();
+          return c && (c === w || (w.length > 1 && c.includes(w))) && !skip.some(x => c.includes(x));
+        });
+        if (j >= 0) { mapping[key] = j; break; }
       }
     }
     if (best === null || Object.keys(mapping).length > Object.keys(best[1]).length) best = [i, mapping];
@@ -256,6 +266,7 @@ function densityFor(grade) {
 function match(material, stock, tables, allowRotate) {
   const [L, W, T] = stock;
   const want = normGrade(material);
+  const aliases = gradeAliases(material);
   const cands = [], skipped = [];
 
   for (const [sheet, rows] of Object.entries(tables)) {
@@ -263,6 +274,9 @@ function match(material, stock, tables, allowRotate) {
     if (!hdr) { skipped.push(`${sheet}：找不到可辨識的表頭`); continue; }
     const [h, col] = hdr;
     const sheetHasGrade = normGrade(sheet).includes(want);
+    // 沒有單位欄時，看單價欄表頭是否寫明 /kg，例如「單價(元/kg)」「未稅價(元/kg)」
+    const priceHead = "單價" in col ? String(rows[h][col["單價"]] ?? "") : "";
+    const unitFromHead = /kg|公斤/i.test(priceHead) ? "元/kg" : "";
     let lastGrade = "";
     for (let k = h + 1; k < rows.length; k++) {
       const row = rows[k];
@@ -270,7 +284,8 @@ function match(material, stock, tables, allowRotate) {
       const gradeCell = get("材質");
       if (gradeCell) lastGrade = gradeCell;   // 合併儲存格常只在第一列有值
       const rowText = normGrade(row.join(" "));
-      if (!(normGrade(lastGrade).includes(want) || rowText.includes(want) || sheetHasGrade)) continue;
+      const gradeText = normGrade(lastGrade);
+      if (!(aliases.some(a => gradeText.includes(a)) || rowText.includes(want) || sheetHasGrade)) continue;
 
       const dims = get("規格") ? parseSpec(get("規格")) : [];
       const t = get("厚") ? toMm(get("厚")) : (dims.length ? dims[0] : null);
@@ -292,7 +307,7 @@ function match(material, stock, tables, allowRotate) {
       const c = {
         sheet, rowNo: k + 1, grade: lastGrade || material, spec: get("規格"),
         t: round(t, 3), w: w === null ? null : round(w, 3), l: l === null ? null : round(l, 3),
-        extraT: round(t - T, 3), placement, price: get("單價"), unit: get("單位"), remark: get("備註"),
+        extraT: round(t - T, 3), placement, price: get("單價"), unit: get("單位") || unitFromHead, remark: get("備註"),
       };
       c.est = estimate(material, stock, c);
       cands.push(c);
@@ -311,10 +326,14 @@ function estimate(material, stock, c) {
   const d = densityFor(normGrade(material));
   if (d === null) return { note: "材質密度未列，不估算" };
   const [L, W] = stock;
-  // 買進的斷面＝供應商厚 × 供應商寬（未標寬則用備料寬），長度＝備料長
-  const width = c.w !== null && c.placement === "直放" ? c.w : W;
-  const kg = L * width * c.t * d / 1e6;
-  return { density: d, size: [L, width, c.t], kg: round(kg, 3), unitPrice: +price, cost: round(kg * +price, 1) };
+  // 以供應商厚度計重：板材（長寬都有標）按備料長寬切料；條料（只標寬）按供應商寬 × 備料長（旋轉時為備料寬）
+  let len = L, width = W;
+  if (c.w !== null && c.l === null) {
+    width = c.w;
+    if (c.placement.startsWith("旋轉")) len = W;
+  }
+  const kg = len * width * c.t * d / 1e6;
+  return { density: d, size: [len, width, c.t], kg: round(kg, 3), unitPrice: +price, cost: round(kg * +price, 1) };
 }
 
 function round(v, n) { const f = 10 ** n; return Math.round(v * f) / f; }
